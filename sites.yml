@@ -1,0 +1,69 @@
+---
+# ------------------------------------------------------------------------------
+# Install and configure Oracle GoldenGate (OGG) Microservices
+# ------------------------------------------------------------------------------
+
+- hosts:                all
+  tasks:
+
+  - name:               "Set Global Variables"
+    set_fact:
+      ogg_installer_dir:
+                        "{{ oracle_user_home }}/ogg"
+      ogg_response_file:
+                        "{{ oracle_user_home }}/oggcore.rsp"
+      ogg_sw_archive:   "{{ nfs_software_dir }}/goldengate/191004_fbo_ggs_Linux_x64_shiphome.zip"
+
+  - name:               "Set Complex Global Variables"
+    set_fact:
+      ogg_installer_bin:
+                        "{{ ogg_installer_dir }}/fbo_gg_Linux_x64_services_shiphome/Disk1/runInstaller"
+
+  - name:               "Create directory for OGG Installer"
+    file:
+      name:             "{{ ogg_installer_dir }}"
+      group:            "{{ install_group }}"
+      owner:            oracle
+      state:            directory
+      mode:             0775
+    become:             yes
+    become_user:        oracle
+
+  - name:               "Unzip Oracle GoldenGate Installer"
+    unarchive:
+      creates:          "{{ ogg_installer_bin }}"
+      dest:             "{{ ogg_installer_dir }}"
+      group:            "{{ install_group }}"
+      owner:            oracle
+      remote_src:       yes
+      src:              "{{ ogg_sw_archive }}"
+    become:             yes
+    become_user:        oracle
+ 
+  - name:               "Generate Response File"
+    template:
+      src:              "{{ item.dest | basename  }}.j2"
+      dest:             "{{ item.dest }}"
+      mode:             "{{ item.mode }}"
+    become:             yes
+    become_user:        oracle
+    with_items:
+      - { dest: "{{ ogg_response_file }}", mode: "0600" }
+  
+  - name:               "Perform a Silent Installation"
+    command:
+      argv:
+        -               "{{ ogg_installer_bin }}"
+        -               "-silent"
+        -               "-nowait"
+        -               "-responseFile"
+        -               "{{ ogg_response_file }}"
+    register:           ogg_install
+    become:             yes
+    become_user:        oracle
+
+  - name:               "Display output from silent installation"
+    debug:
+      var:              ogg_install.stdout_lines
+    when:               ogg_install.stdout_lines
+...

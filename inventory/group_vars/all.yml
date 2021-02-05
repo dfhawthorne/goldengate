@@ -1,0 +1,17 @@
+---
+# ------------------------------------------------------------------------------
+# Global variables
+# ------------------------------------------------------------------------------
+
+oracle_user_home:       "/home/oracle"
+nfs_software_dir:       "/opt/share/Software"
+
+# ------------------------------------------------------------------------------
+# Oracle Software Installation Options
+# ------------------------------------------------------------------------------
+
+install_group:          "oinstall"
+inventory_location:     "/opt/app/oraInventory"
+oracle_base:            "/opt/app/oracle"
+oracle_db_home:         "{{ oracle_base }}/product/19.3.0.2/database"
+...
