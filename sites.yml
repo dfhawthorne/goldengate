@@ -55,12 +55,40 @@
         -               "-nowait"
         -               "-responseFile"
         -               "{{ ogg_response_file }}"
+      creates:          "{{ ogg.software_location }}"
     register:           ogg_install
     become:             yes
     become_user:        oracle
+
+  - name:               "Allow OGG to pass through firewall"
+    firewalld:
+      permanent:        yes
+      port:             "{{ item }}"
+      state:            enabled
+      zone:             public
+    with_items:
+      -                 "{{ ogg.manager_port }}/tcp"
+      -                 "{{ ogg.manager_port }}/udp"
+    become:             yes
+    become_user:        root
+    notify:             "Reload FireWall Rules"
 
   - name:               "Display output from silent installation"
     debug:
       var:              ogg_install.stdout_lines
     when:               ogg_install.stdout_lines
+
+# ------------------------------------------------------------------------------
+# Handlers
+# ------------------------------------------------------------------------------
+
+  handlers:
+
+  - name:               "Reload FireWall Rules"
+    command:
+      argv:
+        -               firewall-cmd
+        -               "--reload"
+    become:             yes
+    become_user:        root
 ...
