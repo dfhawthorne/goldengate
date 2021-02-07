@@ -10,9 +10,6 @@
     set_fact:
       ogg_installer_dir:
                         "{{ oracle_user_home }}/ogg"
-      ogg_response_file:
-                        "{{ oracle_user_home }}/oggcore.rsp"
-      ogg_sw_archive:   "{{ nfs_software_dir }}/goldengate/191004_fbo_ggs_Linux_x64_shiphome.zip"
 
   - name:               "Set Complex Global Variables"
     set_fact:

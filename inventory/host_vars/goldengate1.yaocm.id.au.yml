@@ -7,4 +7,15 @@ SID:                    "GG1V19C"
 PDBName:                "GG1A"
 globalDBName:           "GG1CDB19C.YAOCM.ID.AU"
 
+# ------------------------------------------------------------------------------
+# OGG Installation Options
+# ------------------------------------------------------------------------------
+
+ogg_response_file:      "{{ oracle_user_home }}/oggcore_oracle_v_19_1_0.rsp"
+ogg_sw_archive:         "{{ nfs_software_dir }}/goldengate/191004_fbo_ggs_Linux_x64_shiphome.zip"
+ogg:
+  install_option:       "ORA19c"
+  software_location:    "{{ oracle_base }}/product/19.1.0/ogg"
+  start_manager:        true
+  manager_port:         15000
 ...
