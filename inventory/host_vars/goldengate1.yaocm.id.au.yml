@@ -8,14 +8,21 @@ PDBName:                "GG1A"
 globalDBName:           "GG1CDB19C.YAOCM.ID.AU"
 
 # ------------------------------------------------------------------------------
-# OGG Installation Options
+# OGG Installation Options for OGG Microservices
 # ------------------------------------------------------------------------------
 
-ogg_response_file:      "{{ oracle_user_home }}/oggcore_oracle_v_19_1_0.rsp"
-ogg_sw_archive:         "{{ nfs_software_dir }}/goldengate/191004_fbo_ggs_Linux_x64_shiphome.zip"
-ogg:
-  install_option:       "ORA19c"
-  software_location:    "{{ oracle_base }}/product/19.1.0/ogg"
-  start_manager:        true
-  manager_port:         15000
+patch_number:           "31908587"
+patch_archive_loc:      "{{ nfs_software_dir }}/goldengate/microservices"
+version:                "19100201013"
+platform:               "Linux-x86-64"
+response_file:          "{{ oracle_user_home }}/oggcore_oracle_v_19_1_0.rsp"
+apply_patch_script:     "{{ oracle_user_home }}/apply_patch.sh"
+sw_archive:             "{{ nfs_software_dir }}/goldengate/microservices/191004_fbo_ggs_Linux_x64_services_shiphome.zip"
+install_option:         "ORA19c"
+software_location:      "{{ oracle_base }}/product/19.1.0/ogg"
+opatch_bin:             "{{ software_location }}/OPatch/opatch"
+start_manager:          false
+manager_port:           15000
+installer_dir:          "{{ oracle_user_home }}/ogg"
+installer_bin:          "{{ installer_dir }}/fbo_ggs_Linux_x64_services_shiphome/Disk1/runInstaller"
 ...

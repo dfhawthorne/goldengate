@@ -6,19 +6,9 @@
 - hosts:                all
   tasks:
 
-  - name:               "Set Global Variables"
-    set_fact:
-      ogg_installer_dir:
-                        "{{ oracle_user_home }}/ogg"
-
-  - name:               "Set Complex Global Variables"
-    set_fact:
-      ogg_installer_bin:
-                        "{{ ogg_installer_dir }}/fbo_gg_Linux_x64_services_shiphome/Disk1/runInstaller"
-
   - name:               "Create directory for OGG Installer"
     file:
-      name:             "{{ ogg_installer_dir }}"
+      name:             "{{ installer_dir }}"
       group:            "{{ install_group }}"
       owner:            oracle
       state:            directory
@@ -28,16 +18,16 @@
 
   - name:               "Unzip Oracle GoldenGate Installer"
     unarchive:
-      creates:          "{{ ogg_installer_bin }}"
-      dest:             "{{ ogg_installer_dir }}"
+      creates:          "{{ installer_bin }}"
+      dest:             "{{ installer_dir }}"
       group:            "{{ install_group }}"
       owner:            oracle
       remote_src:       yes
-      src:              "{{ ogg_sw_archive }}"
+      src:              "{{ sw_archive }}"
     become:             yes
     become_user:        oracle
  
-  - name:               "Generate Response File"
+  - name:               "Generate Response File and scripts"
     template:
       src:              "{{ item.dest | basename  }}.j2"
       dest:             "{{ item.dest }}"
@@ -45,20 +35,26 @@
     become:             yes
     become_user:        oracle
     with_items:
-      - { dest: "{{ ogg_response_file }}", mode: "0600" }
+      - { dest: "{{ response_file }}", mode: "0600" }
+      - { dest: "{{ apply_patch_script }}", mode: "0700" }
   
   - name:               "Perform a Silent Installation"
     command:
       argv:
-        -               "{{ ogg_installer_bin }}"
+        -               "{{ installer_bin }}"
         -               "-silent"
-        -               "-nowait"
+        -               "-waitForCompletion"
         -               "-responseFile"
-        -               "{{ ogg_response_file }}"
-      creates:          "{{ ogg.software_location }}"
+        -               "{{ response_file }}"
+      creates:          "{{ software_location }}"
     register:           ogg_install
     become:             yes
     become_user:        oracle
+
+  - name:               "Display output from silent installation"
+    debug:
+      var:              ogg_install.stdout_lines
+    when:               ogg_install.stdout_lines is defined
 
   - name:               "Allow OGG to pass through firewall"
     firewalld:
@@ -67,17 +63,70 @@
       state:            enabled
       zone:             public
     with_items:
-      -                 "{{ ogg.manager_port }}/tcp"
-      -                 "{{ ogg.manager_port }}/udp"
+      -                 "{{ manager_port }}/tcp"
+      -                 "{{ manager_port }}/udp"
     become:             yes
     become_user:        root
     notify:             "Reload FireWall Rules"
 
-  - name:               "Display output from silent installation"
-    debug:
-      var:              ogg_install.stdout_lines
-    when:               ogg_install.stdout_lines
+  - name:               "Verify existence of OPatch utility"
+    stat:
+      path:             "{{ opatch_bin }}"
+    register:           opatch_stat
 
+  - name:               "Apply patch if it has not been applied"
+    block:
+
+    - name:             "Get current patches"
+      command:
+        argv:
+          -             "{{ opatch_bin }}"
+          -             "lsinventory"
+      become:           yes
+      become_user:      oracle
+      register:         patch_inventory
+
+    - name:             "Patch {{ patch_number }} needs to be applied"
+      block:
+      
+      - name:           "Create Extraction Directory"
+        file:
+          path:         "{{ software_location }}/patches/P{{ patch_number }}"
+          group:        "{{ install_group }}"
+          owner:        oracle
+          state:        directory
+          mode:         '775'
+
+      - name:           "Unzip Oracle Patch {{ patch_number }}"
+        unarchive:
+          creates:      "{{ software_location }}/patches/P{{ patch_number }}/{{ patch_number }}"
+          dest:         "{{ software_location }}/patches/P{{ patch_number }}"
+          group:        "{{ install_group }}"
+          owner:        oracle
+          remote_src:   yes
+          src:          "{{ patch_archive_loc }}/p{{ patch_number }}_{{ version }}_{{ platform }}.zip"
+
+      - name:           "Apply patch {{ patch_number }}"
+        command:
+          argv:
+            -           "{{ apply_patch_script }}"
+            -           "{{ patch_number }}"
+        register:       apply_patch
+
+      - name:           "Display output from apply of patch {{ patch_number }}"
+        debug:
+          var:          apply_patch.stdout_lines
+        when:           apply_patch.stdout_lines is defined
+
+      become:           yes
+      become_user:      oracle
+      when:
+        -               patch_inventory.stdout is defined
+        -               patch_inventory.stdout is not search(patch_number)
+
+    when:
+      -                 opatch_stat.stat is defined
+      -                 opatch_stat.stat.exists
 # ------------------------------------------------------------------------------
 # Handlers
 # ------------------------------------------------------------------------------

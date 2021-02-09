@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# ------------------------------------------------------------------------------
+# Applies a GoldenGate patch
+# Patch number is passed as the first parameter
+# ------------------------------------------------------------------------------
+
+patch_number=$1
+
+if [[ -z "${patch_number}" ]]
+then
+    printf "No patch number provided\n" >&2
+    exit 1
+fi
+
+export ORACLE_HOME="{{ software_location }}"
+export PATH="${ORACLE_HOME}/bin":"${ORACLE_HOME}/OPatch":${PATH}
+
+patch_dir="{{ software_location }}/patches/P${patch_number}/${patch_number}"
+if [[ ! -d "${patch_dir}" ]]
+then
+    printf "Patch directory """%s""" is invalid\n" "${patch_dir}" >&2
+    exit 1
+fi
+
+unzip_cmd="$(command -v unzip)"
+opatch_cmd="$(command -v opatch)"
+
+if [[ -z "${unzip_cmd}" ]]
+then
+    printf "unzip command not found\n" >&2
+    exit 1
+fi
+if [[ -z "${opatch_cmd}" ]]
+then
+    printf "opatch command not found\n" >&2
+    exit 1
+fi
+
+cd "${patch_dir}"
+opatch apply -silent -runSql
+

@@ -10,3 +10,4 @@ Prof. Fred Brooks recommends that one keep a journal of design decisions in orde
 - [2021-02-06](2021_02_06.md): Further Design
 - [2021-02-07](2021_02_07.md): Set up Install Config File
 - [2021-02-08](2021_02_08.md): OGG Patching
+- [2021-02-09](2021_02_09.md): Classic and Microservices
