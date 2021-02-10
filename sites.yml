@@ -84,9 +84,10 @@
           -             "lsinventory"
       become:           yes
       become_user:      oracle
+      changed_when:     false
       register:         patch_inventory
 
-    - name:             "Patch {{ patch_number }} needs to be applied"
+    - name:             "Patch needs to be applied"
       block:
       
       - name:           "Create Extraction Directory"
@@ -97,7 +98,7 @@
           state:        directory
           mode:         '775'
 
-      - name:           "Unzip Oracle Patch {{ patch_number }}"
+      - name:           "Unzip Oracle Patch"
         unarchive:
           creates:      "{{ software_location }}/patches/P{{ patch_number }}/{{ patch_number }}"
           dest:         "{{ software_location }}/patches/P{{ patch_number }}"
@@ -106,14 +107,14 @@
           remote_src:   yes
           src:          "{{ patch_archive_loc }}/p{{ patch_number }}_{{ version }}_{{ platform }}.zip"
 
-      - name:           "Apply patch {{ patch_number }}"
+      - name:           "Apply patch"
         command:
           argv:
             -           "{{ apply_patch_script }}"
             -           "{{ patch_number }}"
         register:       apply_patch
 
-      - name:           "Display output from apply of patch {{ patch_number }}"
+      - name:           "Display output from apply of patch"
         debug:
           var:          apply_patch.stdout_lines
         when:           apply_patch.stdout_lines is defined
