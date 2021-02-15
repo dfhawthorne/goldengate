@@ -25,4 +25,10 @@ start_manager:          false
 manager_port:           15000
 installer_dir:          "{{ oracle_user_home }}/ogg"
 installer_bin:          "{{ installer_dir }}/fbo_ggs_Linux_x64_services_shiphome/Disk1/runInstaller"
+configure_ogg_db:       "{{ oracle_user_home }}/configure_oracle_gg.py"
+local_service_name:     "OGG1A.YAOCM.ID.AU"
+remote_service_name:    "OGG2A.YAOCM.ID.AU"
+remote_host_name:       "GOLDENGATE2.YAOCM.ID.AU"
+client_type:            "CAPTURE"
+client_name:            "C##GGADMIN"
 ...

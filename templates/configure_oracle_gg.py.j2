@@ -1,0 +1,350 @@
+#!/bin/env python3
+# ------------------------------------------------------------------------------
+# Configure the local container database for Oracle GoldenGate (OGG)
+# ------------------------------------------------------------------------------
+
+import argparse
+import cx_Oracle
+import os
+import subprocess
+
+parser                    = argparse.ArgumentParser(                           \
+    description="Configure the local container database for Oracle GoldenGate (OGG)" \
+    )
+parser.add_argument("gg_client_type", help="one of `capture` or `replicat`")
+parser.add_argument("gg_user_name",   help="name of the OGG user")
+args = parser.parse_args()
+
+os.environ['ORACLE_BASE'] = '{{ oracle_base }}'
+os.environ['ORACLE_SID']  = '{{ SID }}'
+os.environ['ORACLE_HOME'] = '{{ oracle_db_home }}'
+
+oracle_bin                = '{{ oracle_db_home }}/bin'
+
+# ------------------------------------------------------------------------------
+# Start listener
+# ------------------------------------------------------------------------------
+
+lp                        = subprocess.Popen(                                  \
+                                [f'{oracle_bin}/lsnrctl', 'status'],           \
+                                stdout=subprocess.PIPE,                        \
+                                stderr=subprocess.PIPE                         \
+                            )
+
+lout                      = str(lp.stdout.read())
+
+if lout.find('TNS-00511: No listener') >= 0:
+    print("Start listener")
+    lp                    = subprocess.Popen(                                  \
+                                [f'{oracle_bin}/lsnrctl', 'start'],            \
+                                stdout=subprocess.PIPE,                        \
+                                stderr=subprocess.PIPE                         \
+                            )
+    lout                  = str(lp.stdout.read())
+    if lout.find("The command completed successfully") >= 0:
+        print("Listener started successfully")
+    else:
+        print(lout, file=sys.stderr)
+        exit(1)
+elif lout.find("The command completed successfully") >= 0:
+    print("Listener is running")
+else:
+    print(lout, file=sys.stderr)
+    exit(1)
+
+# ------------------------------------------------------------------------------
+# Get initial status of database instance
+# ------------------------------------------------------------------------------
+
+status = None
+conn   = None
+cursor = None
+
+try:
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA)
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM v$instance")
+    (status, ) = cursor.fetchone()
+except cx_Oracle.OperationalError as ex:
+    err = str(ex).split('\n')[0]
+    if err != "ORA-01034: ORACLE not available":
+        raise
+    else:
+        status = "NOT STARTED"
+
+# ------------------------------------------------------------------------------
+# Start up instance, if required
+# ------------------------------------------------------------------------------
+
+if status == "NOT STARTED":
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA | cx_Oracle.PRELIM_AUTH)
+    conn.startup()
+    conn.close()
+    conn   = None
+    status = "STARTED"
+    print("CDB instance started")
+
+# ------------------------------------------------------------------------------
+# Mount and open the database instance, if required
+# ------------------------------------------------------------------------------
+
+if conn == None:
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA)
+    cursor = None
+
+if cursor == None:
+    cursor = conn.cursor()
+
+if status == "STARTED":
+    cursor.execute("alter database mount")
+    status = "MOUNTED"
+    print("CDB Database mounted")
+
+if status == "MOUNTED":
+    cursor.execute("alter database open")
+    status = "OPEN"
+    print("CDB Database opened")
+
+print(f'Status of CDB Instance is {status}')
+
+# ------------------------------------------------------------------------------
+# Create OGG common user, if required
+# ------------------------------------------------------------------------------
+
+gg_user_name = args.gg_user_name.upper().split()[0]
+if gg_user_name.startswith('C##'):
+    cursor.execute(                                                            \
+        'SELECT COUNT(*) FROM DBA_USERS WHERE username=:username',             \
+        { "username": gg_user_name}                                            \
+        )
+    (num_users, ) = cursor.fetchone()
+    if num_users == 0:
+        sql=f"""
+            CREATE USER "{gg_user_name}"
+                PROFILE "DEFAULT"
+                IDENTIFIED BY "{{ pw_all }}"
+                DEFAULT TABLESPACE "USERS"
+                TEMPORARY TABLESPACE "TEMP"
+                QUOTA UNLIMITED ON "USERS"
+                ACCOUNT UNLOCK
+                CONTAINER=ALL"""
+        cursor.execute(sql)
+        print(f'Common user, "{gg_user_name}", created')
+    else:
+        print(f'Common user, "{gg_user_name}", already exists')
+
+    sql = 'SELECT COUNT(*) FROM dba_goldengate_privileges WHERE username=:username'
+    cursor.execute(sql, { "username": gg_user_name })
+    (num_privs, ) = cursor.fetchone()
+    if num_privs == 0:
+        parms = [
+                gg_user_name,
+                args.gg_client_type,
+                True,                   # Grant SELECT ANY DICTIONARY privilege
+                True,                   # Do GRANTS now
+                None,                   # File name for deferred grants
+                None,                   # Directory name for file name
+                None,                   # Extra privileges
+                'ALL'                   # Container
+                ]
+        cursor.callproc('dbms_goldengate_auth.grant_admin_privilege', parms)
+        print(f'Privileges granted to common user, "{gg_user_name}"')
+    else:
+        print(f'Privileges already exist for common user, "{gg_user_name}"')
+
+# ------------------------------------------------------------------------------
+# Open the pluggable database, if required
+# ------------------------------------------------------------------------------
+
+cursor.execute("SELECT open_mode FROM v$pdbs WHERE name='{{ PDBName }}'")
+(pdb_open_mode, ) = cursor.fetchone()
+if pdb_open_mode == "MOUNTED":
+    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} OPEN")
+    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
+    print("PDB ({{ PDBName }}) opened")
+
+cursor.execute("SELECT open_mode FROM v$pdbs WHERE name='{{ PDBName }}'")
+(pdb_open_mode, ) = cursor.fetchone()
+
+print(f'Status of PDB ({{ PDBName }}) is {pdb_open_mode}')
+
+# ------------------------------------------------------------------------------
+# Save the state of the pluggable database, if required
+# ------------------------------------------------------------------------------
+
+cursor.execute("SELECT state FROM cdb_pdb_saved_states WHERE con_name='{{ PDBName }}'")
+(pdb_saved_state, ) = cursor.fetchone()
+if pdb_saved_state is None or pdb_saved_state != "OPEN":
+    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
+    print("PDB ({{ PDBName }}) state saved")
+else:
+    print(f"Status of PDB ({{ PDBName }}) is {pdb_saved_state}")
+
+# ------------------------------------------------------------------------------
+# Create OGG user in local container, if required
+# ------------------------------------------------------------------------------
+
+if not gg_user_name.startswith('C##'):
+    cursor.execute('ALTER SESSION SET CONTAINER={{ PDBName }}')
+    cursor.execute(                                                            \
+        'SELECT COUNT(*) FROM DBA_USERS WHERE username=:username',             \
+        { username: gg_user_name}                                              \
+        )
+    (num_users, ) = cursor.fetchone()
+    if num_users == 0:
+        sql=f"""
+            CREATE USER "{gg_user_name}"
+                PROFILE "DEFAULT"
+                IDENTIFIED BY "{{ pw_all }}"
+                DEFAULT TABLESPACE "USERS"
+                TEMPORARY TABLESPACE "TEMP"
+                QUOTA UNLIMITED ON "USERS"
+                ACCOUNT UNLOCK
+                CONTAINER=ALL"""
+        cursor.execute(sql)
+        print(f'User, "{gg_user_name}", created in {{ PDBName }}')
+    else:
+        print(f'User, "{gg_user_name}", already exists in {{ PDBName }}')
+
+    sql = 'SELECT COUNT(*) FROM dba_goldengate_privileges WHERE username=:username'
+    cursor.execute(sql, { username: gg_user_name })
+    (num_privs, ) = cursor.fetchone()
+    if num_privs == 0:
+        parms = [
+                gg_user_name,
+                args.gg_client_type,
+                True,                   # Grant SELECT ANY DICTIONARY privilege
+                True,                   # Do GRANTS now
+                None,                   # File name for deferred grants
+                None,                   # Directory name for file name
+                None,                   # Extra privileges
+                'ALL'                   # Container
+                ]
+        cursor.callproc('dbms_goldengate_auth.grant_admin_privilege', parms)
+        print(f'Privileges granted to user, "{gg_user_name}", in {{ PDBName }}.')
+    else:
+        print(f'Privileges already exist for user, "{gg_user_name}", in {{ PDBName }}.')
+    cursor.execute('ALTER SESSION SET CONTAINER=CDB$ROOT')
+
+# ------------------------------------------------------------------------------
+# Ensure that the database is in ARCHIVELOG mode and Auto UNDO management.
+# This requires the change to be done in MOUNT mode
+# ------------------------------------------------------------------------------
+
+cursor.execute("SELECT log_mode FROM v$database")
+(log_mode, ) = cursor.fetchone()
+cursor.execute("SELECT value FROM v$parameter WHERE name = 'undo_management'")
+(undo_mgt, ) = cursor.fetchone()
+print(f"Database is in {log_mode} mode, and UNDO_MANAGEMENT='{undo_mgt}'.")
+if (log_mode == "NOARCHIVELOG" or undo_mgt != 'AUTO'):
+    cursor.execute("ALTER SESSION SET CONTAINER=CDB$ROOT")
+    if undo_mgt != 'AUTO':
+        cursor.execute("ALTER SYSTEM SET UNDO_MANAGEMENT='AUTO' SCOPE=SPFILE")
+        print("UNDO_MANAGEMENT set to 'AUTO'.")
+    conn.shutdown(mode = cx_Oracle.DBSHUTDOWN_IMMEDIATE)
+    cursor.execute("ALTER DATABASE CLOSE NORMAL")
+    cursor.execute("ALTER DATABASE DISMOUNT")
+    cursor.close()
+    conn.shutdown(mode = cx_Oracle.DBSHUTDOWN_FINAL)
+    conn.close()
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA | cx_Oracle.PRELIM_AUTH)
+    conn.startup()
+    conn.close()
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA)
+    cursor = conn.cursor()
+    cursor.execute("ALTER DATABASE MOUNT")
+    if log_mode == "NOARCHIVELOG":
+        cursor.execute("ALTER DATABASE ARCHIVELOG")
+        print('Database changed to ARCHIVELOG mode.')
+    cursor.execute("ALTER DATABASE OPEN")
+
+# ------------------------------------------------------------------------------
+# Ensure that the database is in FORCE LOGGING mode, and supplemental logging is
+# collected.
+# This can be done in OPEN mode
+# ------------------------------------------------------------------------------
+
+cursor.execute("SELECT supplemental_log_data_min, force_logging FROM v$database")
+(min_log, force_log) = cursor.fetchone()
+print(f'Supplemental_log_data_min={min_log}, force_logging={force_log}.')
+if min_log   == "NO":
+    cursor.execute("ALTER DATABASE ADD SUPPLEMENTAL LOG DATA")
+    print('Supplement log data is now being recorded.')
+if force_log == "NO":
+    cursor.execute("ALTER DATABASE FORCE LOGGING")
+    print('All changes are now being logged.')
+
+# ------------------------------------------------------------------------------
+# Set system parameters
+# ------------------------------------------------------------------------------
+
+cursor.execute("SELECT value FROM v$parameter WHERE name = 'enable_goldengate_replication'")
+(ogg_repl, ) = cursor.fetchone()
+print(f"ENABLE_GOLDENGATE_REPLICATION='{ogg_repl}'")
+if ogg_repl.upper() == 'FALSE':
+    cursor.execute("ALTER SYSTEM SET ENABLE_GOLDENGATE_REPLICATION=true")
+    print('ENABLE_GOLDENGATE_REPLICATION set to true.')
+
+cursor.execute("SELECT value FROM v$parameter WHERE name = 'undo_retention'")
+(undo_rtn, ) = cursor.fetchone()
+print(f'UNDO_RETENTION={undo_rtn}')
+if int(undo_rtn) < 86400:
+    cursor.execute("ALTER SYSTEM SET UNDO_RETENTION=86400")
+    print('UNDO_RETENTION set to 86400.')
+
+# ------------------------------------------------------------------------------
+# Define the required service name in the PDB to be used for testing
+# ------------------------------------------------------------------------------
+
+ogg_service_network_name = '{{ local_service_name }}'.upper()
+ogg_service_name         = ogg_service_network_name.split('.')[0]
+sql = """
+    SELECT count(*)
+        FROM dba_services
+        WHERE name=:name"""
+cursor.execute(sql, {"name": ogg_service_name})
+(num_services, ) = cursor.fetchone()
+if num_services == 0:
+    print(f'Service {ogg_service_name} is not defined')
+    parms  = [
+        ogg_service_name,
+        ogg_service_network_name
+    ]
+    cursor.callproc('dbms_service.create_service', parms)
+    print(f"Service {ogg_service_name} created as {ogg_service_network_name}")
+    parms  = [
+        ogg_service_name,
+        None
+    ]
+    cursor.callproc('dbms_service.start_service', parms)
+    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
+    print(f'Service {ogg_service_name} started')
+else:
+    print(f"Service {ogg_service_name} is defined")
+
+# ------------------------------------------------------------------------------
+# Ensure that the database service is started
+# ------------------------------------------------------------------------------
+
+lsnr_proc = subprocess.Popen(                                                  \
+                [f'{oracle_bin}/lsnrctl', 'services'],                         \
+                stdout=subprocess.PIPE                                         \
+                )
+lsnr_serv = str(lsnr_proc.stdout.read())
+
+if lsnr_serv.find(ogg_service_network_name) == -1:
+    parms  = [ogg_service_name, None]
+    cursor.callproc('dbms_service.start_service', parms)
+    print(f'Database service ({ogg_service_name}) started.')
+else:
+    print(f'Database service ({ogg_service_name}) is already started.')
+
+# ------------------------------------------------------------------------------
+# Clean up and exit
+# ------------------------------------------------------------------------------
+
+cursor.close()
+conn.close()
+
+exit(0)
+

@@ -1,10 +1,26 @@
 ---
-# ------------------------------------------------------------------------------
-# Install and configure Oracle GoldenGate (OGG) Microservices
-# ------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Install and configure Oracle GoldenGate (OGG) Microservices/Classic
+# ----------------------------------------------------------------------------
 
 - hosts:                all
   tasks:
+
+  # --------------------------------------------------------------------------
+  # Load passwords from passwords/oracle.yml which has the following
+  # variables:
+  # * pw_all
+  # * pw_sys
+  # * pw_system
+  # * pw_pdbadmin
+  #
+  # >>>>>> This file is deliberately NOT included in the GIT repository <<<<<<
+  # --------------------------------------------------------------------------
+
+  - name:               "Load passwords"
+    include_vars:
+      file:             "passwords/oracle.yml"
+    no_log:             true
 
   - name:               "Create directory for OGG Installer"
     file:
@@ -15,6 +31,8 @@
       mode:             0775
     become:             yes
     become_user:        oracle
+
+  # ------------------- Use Oracle GoldenGate Installer
 
   - name:               "Unzip Oracle GoldenGate Installer"
     unarchive:
@@ -56,6 +74,8 @@
       var:              ogg_install.stdout_lines
     when:               ogg_install.stdout_lines is defined
 
+  # ------------------- Configure firewall for OGG
+
   - name:               "Allow OGG to pass through firewall"
     firewalld:
       permanent:        yes
@@ -68,6 +88,8 @@
     become:             yes
     become_user:        root
     notify:             "Reload FireWall Rules"
+
+  # ------------------- Apply OGG patches
 
   - name:               "Verify existence of OPatch utility"
     stat:
@@ -128,9 +150,76 @@
     when:
       -                 opatch_stat.stat is defined
       -                 opatch_stat.stat.exists
-# ------------------------------------------------------------------------------
-# Handlers
-# ------------------------------------------------------------------------------
+
+  # ------------------- Set TNSNAMES Aliases
+
+  - name:               "Set path of TNSNAMES file"
+    set_fact:
+      tnsnames:         "{{ oracle_db_home }}/network/admin/tnsnames.ora"
+      tns_alias:        "remote_ogg"
+
+  - name:               "Add {{ tns_alias }} alias to TNSNAMES file"
+    lineinfile:
+      create:           "yes"
+      group:            "{{ install_group }}"
+      mode:             0644
+      owner:            "oracle"
+      path:             "{{ tnsnames }}"
+      regexp:           '^{{ tns_alias }}\s*=\s*'
+      line:             >
+        {{ tns_alias }} = (DESCRIPTION=
+        (ADDRESS=(PROTOCOL=TCP)(HOST={{ remote_host_name }})
+        (PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)
+        (SERVICE_NAME={{ remote_service_name }})))
+      insertbefore:     EOF
+    become:             yes
+    become_user:        oracle
+
+  # ------------------- Configure Oracle DB for OGG
+
+  - name:               "Install PIP"
+    yum:
+      name:             python3-pip
+      state:            present
+    become:             yes
+    become_user:        root 
+
+  - name:               "Install required Python packages"
+    pip:
+      name:
+        -               "cx_Oracle"
+      state:            present
+    become:             yes
+    become_user:        root 
+
+  - name:               "Create configuration script"
+    template:
+      dest:             "{{ item }}"
+      src:              "{{ item | basename }}.j2"
+      mode:             "u+rwx"
+    with_items:
+      -                 "{{ configure_ogg_db }}"
+    become:             yes
+    become_user:        oracle
+
+  - name:               "Configure DB for OGG"
+    command:
+      argv:
+        -               "{{ configure_ogg_db }}"
+        -               "{{ client_type }}"
+        -               "{{ client_name }}"
+    become:             yes
+    become_user:        oracle
+    register:           configure_ogg_db
+
+  - name:               "Display output from Configure DB for OGG"
+    debug:
+      var:              configure_ogg_db.stdout_lines
+    when:               configure_ogg_db.stdout_lines is defined
+     
+  # ----------------------------------------------------------------------------
+  # Handlers
+  # ----------------------------------------------------------------------------
 
   handlers:
 
