@@ -13,4 +13,5 @@ Prof. Fred Brooks recommends that one keep a journal of design decisions in orde
 - [2021-02-09](2021_02_09.md): Classic and Microservices
 - [2021-02-10](2021_02_10.md): Preparing the Database for Oracle GoldenGate
 - [2021-02-14](2021_02_14.md): OGG Credentials and Configure Script
-- [2021-02-16](2021_02_26.md): Create Oracle DB Configuration Script
+- [2021-02-16](2021_02_16.md): Create Oracle DB Configuration Script
+- [2021-02-17](2021_02_17.md): Choosing Capture and Apply Modes
