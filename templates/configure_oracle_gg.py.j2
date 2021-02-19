@@ -12,7 +12,8 @@ parser                    = argparse.ArgumentParser(                           \
     description="Configure the local container database for Oracle GoldenGate (OGG)" \
     )
 parser.add_argument("gg_client_type", help="one of `capture` or `replicat`")
-parser.add_argument("gg_user_name",   help="name of the OGG user")
+parser.add_argument("gg_cdb_user_name",   help="name of the CDB OGG user")
+parser.add_argument("gg_pdb_user_name",   help="name of the PDB OGG user")
 args = parser.parse_args()
 
 os.environ['ORACLE_BASE'] = '{{ oracle_base }}'
@@ -111,16 +112,16 @@ print(f'Status of CDB Instance is {status}')
 # Create OGG common user, if required
 # ------------------------------------------------------------------------------
 
-gg_user_name = args.gg_user_name.upper().split()[0]
-if gg_user_name.startswith('C##'):
+gg_cdb_user_name = args.gg_cdb_user_name.upper().split()[0]
+if gg_cdb_user_name.startswith('C##'):
     cursor.execute(                                                            \
         'SELECT COUNT(*) FROM DBA_USERS WHERE username=:username',             \
-        { "username": gg_user_name}                                            \
+        { "username": gg_cdb_user_name}                                        \
         )
     (num_users, ) = cursor.fetchone()
     if num_users == 0:
         sql=f"""
-            CREATE USER "{gg_user_name}"
+            CREATE USER "{gg_cdb_user_name}"
                 PROFILE "DEFAULT"
                 IDENTIFIED BY "{{ pw_all }}"
                 DEFAULT TABLESPACE "USERS"
@@ -129,16 +130,16 @@ if gg_user_name.startswith('C##'):
                 ACCOUNT UNLOCK
                 CONTAINER=ALL"""
         cursor.execute(sql)
-        print(f'Common user, "{gg_user_name}", created')
+        print(f'Common user, "{gg_cdb_user_name}", created')
     else:
-        print(f'Common user, "{gg_user_name}", already exists')
+        print(f'Common user, "{gg_cdb_user_name}", already exists')
 
     sql = 'SELECT COUNT(*) FROM dba_goldengate_privileges WHERE username=:username'
-    cursor.execute(sql, { "username": gg_user_name })
+    cursor.execute(sql, { "username": gg_cdb_user_name })
     (num_privs, ) = cursor.fetchone()
     if num_privs == 0:
         parms = [
-                gg_user_name,
+                gg_cdb_user_name,
                 args.gg_client_type,
                 True,                   # Grant SELECT ANY DICTIONARY privilege
                 True,                   # Do GRANTS now
@@ -148,9 +149,12 @@ if gg_user_name.startswith('C##'):
                 'ALL'                   # Container
                 ]
         cursor.callproc('dbms_goldengate_auth.grant_admin_privilege', parms)
-        print(f'Privileges granted to common user, "{gg_user_name}"')
+        print(f'Privileges granted to common user, "{gg_cdb_user_name}"')
     else:
-        print(f'Privileges already exist for common user, "{gg_user_name}"')
+        print(f'Privileges already exist for common user, "{gg_cdb_user_name}"')
+else:
+    print(f'CDB user, "{gg_cdb_user_name}", must be a common user')
+    exit(1)
 
 # ------------------------------------------------------------------------------
 # Open the pluggable database, if required
@@ -184,16 +188,16 @@ else:
 # Create OGG user in local container, if required
 # ------------------------------------------------------------------------------
 
-if not gg_user_name.startswith('C##'):
+if not gg_pdb_user_name.upper().startswith('C##'):
     cursor.execute('ALTER SESSION SET CONTAINER={{ PDBName }}')
     cursor.execute(                                                            \
         'SELECT COUNT(*) FROM DBA_USERS WHERE username=:username',             \
-        { username: gg_user_name}                                              \
+        { username: gg_pdb_user_name}                                          \
         )
     (num_users, ) = cursor.fetchone()
     if num_users == 0:
         sql=f"""
-            CREATE USER "{gg_user_name}"
+            CREATE USER "{gg_pdb_user_name}"
                 PROFILE "DEFAULT"
                 IDENTIFIED BY "{{ pw_all }}"
                 DEFAULT TABLESPACE "USERS"
@@ -202,29 +206,32 @@ if not gg_user_name.startswith('C##'):
                 ACCOUNT UNLOCK
                 CONTAINER=ALL"""
         cursor.execute(sql)
-        print(f'User, "{gg_user_name}", created in {{ PDBName }}')
+        print(f'User, "{gg_pdb_user_name}", created in {{ PDBName }}')
     else:
-        print(f'User, "{gg_user_name}", already exists in {{ PDBName }}')
+        print(f'User, "{gg_pdb_user_name}", already exists in {{ PDBName }}')
 
     sql = 'SELECT COUNT(*) FROM dba_goldengate_privileges WHERE username=:username'
-    cursor.execute(sql, { username: gg_user_name })
+    cursor.execute(sql, { username: gg_pdb_user_name })
     (num_privs, ) = cursor.fetchone()
     if num_privs == 0:
         parms = [
-                gg_user_name,
+                gg_pdb_user_name,
                 args.gg_client_type,
                 True,                   # Grant SELECT ANY DICTIONARY privilege
                 True,                   # Do GRANTS now
                 None,                   # File name for deferred grants
                 None,                   # Directory name for file name
                 None,                   # Extra privileges
-                'ALL'                   # Container
+                'CURRENT'               # Container
                 ]
         cursor.callproc('dbms_goldengate_auth.grant_admin_privilege', parms)
-        print(f'Privileges granted to user, "{gg_user_name}", in {{ PDBName }}.')
+        print(f'Privileges granted to user, "{gg_pdb_user_name}", in {{ PDBName }}.')
     else:
-        print(f'Privileges already exist for user, "{gg_user_name}", in {{ PDBName }}.')
+        print(f'Privileges already exist for user, "{gg_pdb_user_name}", in {{ PDBName }}.')
     cursor.execute('ALTER SESSION SET CONTAINER=CDB$ROOT')
+else:
+    print(f'PDB user, "{gg_pdb_user_name}", must not be a common user')
+    exit(1)
 
 # ------------------------------------------------------------------------------
 # Ensure that the database is in ARCHIVELOG mode and Auto UNDO management.

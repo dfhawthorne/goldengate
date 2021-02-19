@@ -207,7 +207,8 @@
       argv:
         -               "{{ configure_ogg_db }}"
         -               "{{ client_type }}"
-        -               "{{ client_name }}"
+        -               "{{ client_cdb_name }}"
+        -               "{{ client_pdb_name }}"
     become:             yes
     become_user:        oracle
     register:           configure_ogg_db

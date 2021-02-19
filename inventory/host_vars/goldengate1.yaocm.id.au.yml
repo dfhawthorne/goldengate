@@ -30,5 +30,6 @@ local_service_name:     "OGG1A.YAOCM.ID.AU"
 remote_service_name:    "OGG2A.YAOCM.ID.AU"
 remote_host_name:       "GOLDENGATE2.YAOCM.ID.AU"
 client_type:            "CAPTURE"
-client_name:            "C##GGADMIN"
+client_cdb_name:        "C##GGADMIN"
+client_pdb_name:        "GGATE"
 ...
