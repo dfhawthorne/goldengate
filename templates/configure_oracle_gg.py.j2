@@ -188,11 +188,12 @@ else:
 # Create OGG user in local container, if required
 # ------------------------------------------------------------------------------
 
+gg_pdb_user_name = args.gg_pdb_user_name.upper().split()[0]
 if not gg_pdb_user_name.upper().startswith('C##'):
     cursor.execute('ALTER SESSION SET CONTAINER={{ PDBName }}')
     cursor.execute(                                                            \
         'SELECT COUNT(*) FROM DBA_USERS WHERE username=:username',             \
-        { username: gg_pdb_user_name}                                          \
+        { 'username': gg_pdb_user_name}                                        \
         )
     (num_users, ) = cursor.fetchone()
     if num_users == 0:
@@ -203,15 +204,14 @@ if not gg_pdb_user_name.upper().startswith('C##'):
                 DEFAULT TABLESPACE "USERS"
                 TEMPORARY TABLESPACE "TEMP"
                 QUOTA UNLIMITED ON "USERS"
-                ACCOUNT UNLOCK
-                CONTAINER=ALL"""
+                ACCOUNT UNLOCK"""
         cursor.execute(sql)
         print(f'User, "{gg_pdb_user_name}", created in {{ PDBName }}')
     else:
         print(f'User, "{gg_pdb_user_name}", already exists in {{ PDBName }}')
 
     sql = 'SELECT COUNT(*) FROM dba_goldengate_privileges WHERE username=:username'
-    cursor.execute(sql, { username: gg_pdb_user_name })
+    cursor.execute(sql, { 'username': gg_pdb_user_name })
     (num_privs, ) = cursor.fetchone()
     if num_privs == 0:
         parms = [
@@ -300,10 +300,10 @@ if int(undo_rtn) < 86400:
     print('UNDO_RETENTION set to 86400.')
 
 # ------------------------------------------------------------------------------
-# Define the required service name in the PDB to be used for testing
+# Define the required service name in the CDB to be used for testing
 # ------------------------------------------------------------------------------
 
-ogg_service_network_name = '{{ local_service_name }}'.upper()
+ogg_service_network_name = '{{ local_cdb_service_name }}'.upper()
 ogg_service_name         = ogg_service_network_name.split('.')[0]
 sql = """
     SELECT count(*)
@@ -312,32 +312,79 @@ sql = """
 cursor.execute(sql, {"name": ogg_service_name})
 (num_services, ) = cursor.fetchone()
 if num_services == 0:
-    print(f'Service {ogg_service_name} is not defined')
+    print(f'Service {ogg_service_name} is not defined in CDB')
     parms  = [
         ogg_service_name,
         ogg_service_network_name
     ]
     cursor.callproc('dbms_service.create_service', parms)
-    print(f"Service {ogg_service_name} created as {ogg_service_network_name}")
+    print(f"Service {ogg_service_name} created as {ogg_service_network_name} in CDB")
     parms  = [
         ogg_service_name,
         None
     ]
     cursor.callproc('dbms_service.start_service', parms)
-    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
-    print(f'Service {ogg_service_name} started')
+    print(f'Service {ogg_service_name} started in CDB')
 else:
-    print(f"Service {ogg_service_name} is defined")
+    print(f"Service {ogg_service_name} is defined in CDB")
 
 # ------------------------------------------------------------------------------
-# Ensure that the database service is started
+# Ensure that the database service for CDB is started
 # ------------------------------------------------------------------------------
 
 lsnr_proc = subprocess.Popen(                                                  \
                 [f'{oracle_bin}/lsnrctl', 'services'],                         \
                 stdout=subprocess.PIPE                                         \
                 )
-lsnr_serv = str(lsnr_proc.stdout.read())
+lsnr_serv = str(lsnr_proc.stdout.read()).upper()
+
+if lsnr_serv.find(ogg_service_network_name) == -1:
+    parms  = [ogg_service_name, None]
+    cursor.callproc('dbms_service.start_service', parms)
+    print(f'Database service ({ogg_service_name}) started.')
+else:
+    print(f'Database service ({ogg_service_name}) is already started.')
+
+# ------------------------------------------------------------------------------
+# Define the required service name in the CDB to be used for testing
+# ------------------------------------------------------------------------------
+
+cursor.execute('ALTER SESSION SET CONTAINER={{ PDBName }}')
+ogg_service_network_name = '{{ local_pdb_service_name }}'.upper()
+ogg_service_name         = ogg_service_network_name.split('.')[0]
+sql = """
+    SELECT count(*)
+        FROM dba_services
+        WHERE name=:name"""
+cursor.execute(sql, {"name": ogg_service_name})
+(num_services, ) = cursor.fetchone()
+if num_services == 0:
+    print(f'Service {ogg_service_name} is not defined in PDB, {{ PDBName }}')
+    parms  = [
+        ogg_service_name,
+        ogg_service_network_name
+    ]
+    cursor.callproc('dbms_service.create_service', parms)
+    print(f"Service {ogg_service_name} created as {ogg_service_network_name} in PDB, {{ PDBName }}")
+    parms  = [
+        ogg_service_name,
+        None
+    ]
+    cursor.callproc('dbms_service.start_service', parms)
+    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
+    print(f'Service {ogg_service_name} started in PDB, {{ PDBName }}')
+else:
+    print(f"Service {ogg_service_name} is defined in PDB, {{ PDBName }}")
+
+# ------------------------------------------------------------------------------
+# Ensure that the database service for PDB is started
+# ------------------------------------------------------------------------------
+
+lsnr_proc = subprocess.Popen(                                                  \
+                [f'{oracle_bin}/lsnrctl', 'services'],                         \
+                stdout=subprocess.PIPE                                         \
+                )
+lsnr_serv = str(lsnr_proc.stdout.read()).upper()
 
 if lsnr_serv.find(ogg_service_network_name) == -1:
     parms  = [ogg_service_name, None]

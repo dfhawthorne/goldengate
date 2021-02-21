@@ -156,22 +156,26 @@
   - name:               "Set path of TNSNAMES file"
     set_fact:
       tnsnames:         "{{ oracle_db_home }}/network/admin/tnsnames.ora"
-      tns_alias:        "remote_ogg"
 
-  - name:               "Add {{ tns_alias }} alias to TNSNAMES file"
+  - name:               "Add alias to TNSNAMES file"
     lineinfile:
       create:           "yes"
       group:            "{{ install_group }}"
       mode:             0644
       owner:            "oracle"
       path:             "{{ tnsnames }}"
-      regexp:           '^{{ tns_alias }}\s*=\s*'
+      regexp:           '^{{ item.alias }}\s*=\s*'
       line:             >
-        {{ tns_alias }} = (DESCRIPTION=
-        (ADDRESS=(PROTOCOL=TCP)(HOST={{ remote_host_name }})
+        {{ item.alias }} = (DESCRIPTION=
+        (ADDRESS=(PROTOCOL=TCP)(HOST={{ item.host }})
         (PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)
-        (SERVICE_NAME={{ remote_service_name }})))
+        (SERVICE_NAME={{ item.service }})))
       insertbefore:     EOF
+    with_items:
+      - { alias: "remote_cdb_ogg", host: "{{ remote_host_name }}", service: "{{ remote_cdb_service_name }}" }
+      - { alias: "remote_pdb_ogg", host: "{{ remote_host_name }}", service: "{{ remote_pdb_service_name }}" }
+      - { alias: "local_cdb_ogg",  host: "localhost",  service: "{{ local_cdb_service_name }}"  }
+      - { alias: "local_pdb_ogg",  host: "localhost",  service: "{{ local_pdb_service_name }}"  }
     become:             yes
     become_user:        oracle
 
