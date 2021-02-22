@@ -36,4 +36,5 @@ remote_host_name:       "GOLDENGATE1.YAOCM.ID.AU"
 client_type:            "APPLY"
 client_cdb_name:        "C##GGADMIN"
 client_pdb_name:        "GGATE"
+configure_ogg_mgr:      "{{ oracle_user_home }}/configure_ogg_classic.sh"
 ...

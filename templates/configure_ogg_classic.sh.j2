@@ -1,0 +1,55 @@
+#!/bin/env bash
+# ------------------------------------------------------------------------------
+# Configure Oracle GoldenGate (OGG) Classic
+# ------------------------------------------------------------------------------
+
+export ORACLE_BASE="{{ oracle_base }}"
+export ORACLE_HOME="{{ oracle_db_home }}"
+export OGG_HOME="{{ software_location }}"
+export ORACLE_SID={{ SID }}
+
+case ":${PATH}:" in
+    *":${ORACLE_HOME}/bin:"*) ;;
+    *) export PATH="${ORACLE_HOME}/bin:${PATH}" ;;
+esac
+
+case ":${PATH}:" in
+    *":${OGG_HOME}:"*) ;;
+    *) export PATH="${OGG_HOME}:${PATH}" ;;
+esac
+
+if [[ -n "${LD_LIBRARY_PATH}" ]]
+then
+    case ":${LD_LIBRARY_PATH}:" in
+        *":${ORACLE_HOME}/lib:"*) ;;
+        *) export LD_LIBRARY_PATH="${ORACLE_HOME}/lib:${LD_LIBRARY_PATH}" ;;
+    esac
+else
+    export LD_LIBRARY_PATH="${ORACLE_HOME}/lib"
+fi
+
+ggsci <<DONE
+dblogin userid / sysdba
+info manager
+status manager
+info masterkey
+info credentialstore
+info param
+info schematrandata
+info trandata
+info checkpointtable
+info tracetable
+info jagent
+status jagent
+info pmsrvr
+status pmsrvr
+info heartbeattable
+info proceduretrandata
+info all
+show
+versions
+view ggsevt
+view report
+show
+exit
+DONE

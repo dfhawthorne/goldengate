@@ -203,6 +203,7 @@
       mode:             "u+rwx"
     with_items:
       -                 "{{ configure_ogg_db }}"
+      -                 "{{ configure_ogg_mgr }}"
     become:             yes
     become_user:        oracle
 
@@ -221,6 +222,19 @@
     debug:
       var:              configure_ogg_db.stdout_lines
     when:               configure_ogg_db.stdout_lines is defined
+
+  - name:               "Configure Manager for OGG"
+    command:
+      argv:
+        -               "{{ configure_ogg_mgr }}"
+    become:             yes
+    become_user:        oracle
+    register:           configure_ogg_mgr
+
+  - name:               "Display output from Configure Manager for OGG"
+    debug:
+      var:              configure_ogg_mgr.stdout_lines
+    when:               configure_ogg_mgr.stdout_lines is defined
      
   # ----------------------------------------------------------------------------
   # Handlers
