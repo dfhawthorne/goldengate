@@ -1,11 +1,24 @@
 ---
 # ------------------------------------------------------------------------------
+# SSH alias for XEN server
+# ------------------------------------------------------------------------------
+
+xen_server:
+  hosts:
+    victoria_root:
+      ansible_python_interpreter: "/usr/bin/python"
+
+# ------------------------------------------------------------------------------
 # Oracle database hosts
 # ------------------------------------------------------------------------------
 
-all:
+cluster:
   hosts:
     goldengate1.yaocm.id.au:
+      ansible_host:     192.168.1.150
+      ansible_python_interpreter: "/usr/libexec/platform-python"
     goldengate2.yaocm.id.au:
+      ansible_host:     192.168.1.151
+      ansible_python_interpreter: "/usr/libexec/platform-python"
 ...
 

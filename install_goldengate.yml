@@ -1,0 +1,262 @@
+---
+# ----------------------------------------------------------------------------
+# Install and configure Oracle GoldenGate (OGG) Microservices/Classic
+# ----------------------------------------------------------------------------
+
+- hosts:                cluster
+  tasks:
+
+  # --------------------------------------------------------------------------
+  # Set the hostname after the VM had been built in the XEN server farm
+  # --------------------------------------------------------------------------
+
+  - name:               "Set host name"
+    ansible.builtin.hostname:
+      name:             "{{ inventory_hostname }}"
+    become:             yes
+    become_user:        root
+
+  # --------------------------------------------------------------------------
+  # Load passwords from passwords/oracle.yml which has the following
+  # variables:
+  # * pw_all
+  # * pw_sys
+  # * pw_system
+  # * pw_pdbadmin
+  #
+  # >>>>>> This file is deliberately NOT included in the GIT repository <<<<<<
+  # --------------------------------------------------------------------------
+
+  - name:               "Load passwords"
+    include_vars:
+      file:             "passwords/oracle.yml"
+    no_log:             true
+
+  - name:               "Create directory for OGG Installer"
+    file:
+      name:             "{{ installer_dir }}"
+      group:            "{{ install_group }}"
+      owner:            oracle
+      state:            directory
+      mode:             0775
+    become:             yes
+    become_user:        oracle
+
+  # ------------------- Use Oracle GoldenGate Installer
+
+  - name:               "Unzip Oracle GoldenGate Installer"
+    unarchive:
+      creates:          "{{ installer_bin }}"
+      dest:             "{{ installer_dir }}"
+      group:            "{{ install_group }}"
+      owner:            oracle
+      remote_src:       yes
+      src:              "{{ sw_archive }}"
+    become:             yes
+    become_user:        oracle
+ 
+  - name:               "Generate Response File and scripts"
+    template:
+      src:              "{{ item.dest | basename  }}.j2"
+      dest:             "{{ item.dest }}"
+      mode:             "{{ item.mode }}"
+    become:             yes
+    become_user:        oracle
+    with_items:
+      - { dest: "{{ response_file }}", mode: "0600" }
+      - { dest: "{{ apply_patch_script }}", mode: "0700" }
+  
+  - name:               "Perform a Silent Installation"
+    command:
+      argv:
+        -               "{{ installer_bin }}"
+        -               "-silent"
+        -               "-waitForCompletion"
+        -               "-responseFile"
+        -               "{{ response_file }}"
+      creates:          "{{ software_location }}"
+    register:           ogg_install
+    become:             yes
+    become_user:        oracle
+
+  - name:               "Display output from silent installation"
+    debug:
+      var:              ogg_install.stdout_lines
+    when:               ogg_install.stdout_lines is defined
+
+  # ------------------- Configure firewall for OGG
+
+  - name:               "Allow OGG to pass through firewall"
+    firewalld:
+      permanent:        yes
+      port:             "{{ item }}"
+      state:            enabled
+      zone:             public
+    with_items:
+      -                 "{{ manager_port }}/tcp"
+      -                 "{{ manager_port }}/udp"
+    become:             yes
+    become_user:        root
+    notify:             "Reload FireWall Rules"
+
+  # ------------------- Apply OGG patches
+
+  - name:               "Verify existence of OPatch utility"
+    stat:
+      path:             "{{ opatch_bin }}"
+    register:           opatch_stat
+
+  - name:               "Apply patch if it has not been applied"
+    block:
+
+    - name:             "Get current patches"
+      command:
+        argv:
+          -             "{{ opatch_bin }}"
+          -             "lsinventory"
+      become:           yes
+      become_user:      oracle
+      changed_when:     false
+      register:         patch_inventory
+
+    - name:             "Patch needs to be applied"
+      block:
+      
+      - name:           "Create Extraction Directory"
+        file:
+          path:         "{{ software_location }}/patches/P{{ patch_number }}"
+          group:        "{{ install_group }}"
+          owner:        oracle
+          state:        directory
+          mode:         '775'
+
+      - name:           "Unzip Oracle Patch"
+        unarchive:
+          creates:      "{{ software_location }}/patches/P{{ patch_number }}/{{ patch_number }}"
+          dest:         "{{ software_location }}/patches/P{{ patch_number }}"
+          group:        "{{ install_group }}"
+          owner:        oracle
+          remote_src:   yes
+          src:          "{{ patch_archive_loc }}/p{{ patch_number }}_{{ version }}_{{ platform }}.zip"
+
+      - name:           "Apply patch"
+        command:
+          argv:
+            -           "{{ apply_patch_script }}"
+            -           "{{ patch_number }}"
+        register:       apply_patch
+
+      - name:           "Display output from apply of patch"
+        debug:
+          var:          apply_patch.stdout_lines
+        when:           apply_patch.stdout_lines is defined
+
+      become:           yes
+      become_user:      oracle
+      when:
+        -               patch_inventory.stdout is defined
+        -               patch_inventory.stdout is not search(patch_number)
+
+    when:
+      -                 opatch_stat.stat is defined
+      -                 opatch_stat.stat.exists
+
+  # ------------------- Set TNSNAMES Aliases
+
+  - name:               "Set path of TNSNAMES file"
+    set_fact:
+      tnsnames:         "{{ oracle_db_home }}/network/admin/tnsnames.ora"
+
+  - name:               "Add alias to TNSNAMES file"
+    lineinfile:
+      create:           "yes"
+      group:            "{{ install_group }}"
+      mode:             0644
+      owner:            "oracle"
+      path:             "{{ tnsnames }}"
+      regexp:           '^{{ item.alias }}\s*=\s*'
+      line:             >
+        {{ item.alias }} = (DESCRIPTION=
+        (ADDRESS=(PROTOCOL=TCP)(HOST={{ item.host }})
+        (PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)
+        (SERVICE_NAME={{ item.service }})))
+      insertbefore:     EOF
+    with_items:
+      - { alias: "remote_cdb_ogg", host: "{{ remote_host_name }}", service: "{{ remote_cdb_service_name }}" }
+      - { alias: "remote_pdb_ogg", host: "{{ remote_host_name }}", service: "{{ remote_pdb_service_name }}" }
+      - { alias: "local_cdb_ogg",  host: "localhost",  service: "{{ local_cdb_service_name }}"  }
+      - { alias: "local_pdb_ogg",  host: "localhost",  service: "{{ local_pdb_service_name }}"  }
+    become:             yes
+    become_user:        oracle
+
+  # ------------------- Configure Oracle DB for OGG
+
+  - name:               "Install PIP"
+    yum:
+      name:             python3-pip
+      state:            present
+    become:             yes
+    become_user:        root 
+
+  - name:               "Install required Python packages"
+    pip:
+      name:
+        -               "cx_Oracle"
+      state:            present
+    become:             yes
+    become_user:        root 
+
+  - name:               "Create configuration script"
+    template:
+      dest:             "{{ item }}"
+      src:              "{{ item | basename }}.j2"
+      mode:             "u+rwx"
+    with_items:
+      -                 "{{ configure_ogg_db }}"
+      -                 "{{ configure_ogg_mgr }}"
+    become:             yes
+    become_user:        oracle
+
+  - name:               "Configure DB for OGG"
+    command:
+      argv:
+        -               "{{ configure_ogg_db }}"
+        -               "{{ client_type }}"
+        -               "{{ client_cdb_name }}"
+        -               "{{ client_pdb_name }}"
+    become:             yes
+    become_user:        oracle
+    register:           configure_ogg_db
+
+  - name:               "Display output from Configure DB for OGG"
+    debug:
+      var:              configure_ogg_db.stdout_lines
+    when:               configure_ogg_db.stdout_lines is defined
+
+  - name:               "Configure Manager for OGG"
+    command:
+      argv:
+        -               "{{ configure_ogg_mgr }}"
+    become:             yes
+    become_user:        oracle
+    register:           configure_ogg_mgr
+
+  - name:               "Display output from Configure Manager for OGG"
+    debug:
+      var:              configure_ogg_mgr.stdout_lines
+    when:               configure_ogg_mgr.stdout_lines is defined
+     
+  # ----------------------------------------------------------------------------
+  # Handlers
+  # ----------------------------------------------------------------------------
+
+  handlers:
+
+  - name:               "Reload FireWall Rules"
+    command:
+      argv:
+        -               firewall-cmd
+        -               "--reload"
+    become:             yes
+    become_user:        root
+...

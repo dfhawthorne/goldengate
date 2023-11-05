@@ -1,0 +1,47 @@
+---
+# ------------------------------------------------------------------------------
+# Start GoldenGate VMs on the XEN server
+# ------------------------------------------------------------------------------
+
+- hosts: xen_server
+  tasks:
+
+  - name:               "Copy scripts to XEN server"
+    ansible.builtin.copy:
+      dest:             "/OVS/scripts/"
+      group:            "root"
+      mode:             0700
+      owner:            "root"
+      src:              "files/start_goldengate.sh"
+ 
+  - name:               "Create CPU Pools"
+    ansible.builtin.command:
+      cmd:              "/OVS/scripts/create_cpu_pools.sh"
+    register:           create_cpu_pools
+    changed_when:       '"Using config file " in create_cpu_pools.stdout'
+
+  - name:               "Display Output from Create CPU Pools"
+    ansible.builtin.debug:
+      var:              create_cpu_pools.stdout_lines
+    when:
+    -                   create_cpu_pools.changed
+    -                   create_cpu_pools.stdout_lines is defined
+ 
+  - name:               "Start GoldenGate VMs"
+    ansible.builtin.command:
+      cmd:              "/OVS/scripts/start_goldengate.sh"
+    register:           start_goldengate
+    changed_when:       '"Parsing config from " in start_goldengate.stdout'
+
+  - name:               "Display Output from Start GoldenGate VMs"
+    ansible.builtin.debug:
+      var:              start_goldengate.stdout_lines
+    when:
+    -                   start_goldengate.changed
+    -                   start_goldengate.stdout_lines is defined
+
+  - name:               "Pause for 2 minutes to allow VM startup"
+    ansible.builtin.pause:
+      minutes:          2
+    when:               start_goldengate.changed
+...
