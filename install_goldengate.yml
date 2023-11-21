@@ -3,7 +3,7 @@
 # Install and configure Oracle GoldenGate (OGG) Microservices/Classic
 # ----------------------------------------------------------------------------
 
-- hosts:                cluster
+- hosts:                goldengate
   tasks:
 
   # --------------------------------------------------------------------------

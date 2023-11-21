@@ -18,3 +18,5 @@ Prof. Fred Brooks recommends that one keep a journal of design decisions in orde
 * [2021-02-19](2021_02_19.md) Configuring Oracle GoldenGate in a Multitenant Container Database
 * [2021-02-20](2021_02_20.md) Configuring Capture in Integrated Mode
 * [2023-11-05](2023_11_05.md) Integration into XEN Servers
+* [2023-11-21](2023_11_21.md) Update Cluster Name
+
