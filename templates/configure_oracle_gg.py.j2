@@ -106,7 +106,14 @@ if status == "MOUNTED":
     status = "OPEN"
     print("CDB Database opened")
 
-print(f'Status of CDB Instance is {status}')
+cursor.execute("SELECT status, logins, database_status FROM v$instance")
+(status, logins, database_status) = cursor.fetchone()
+
+print(f'Status of CDB Instance is {status}, status of database is {database_status}, and logins are {logins}')
+
+if logins == 'RESTRICTED':
+    cursor.execute('ALTER SYSTEM DISABLE RESTRICTED SESSION')
+    print('Logins have been enabled in CDB')
 
 # ------------------------------------------------------------------------------
 # Create OGG common user, if required
@@ -163,26 +170,104 @@ else:
 cursor.execute("SELECT open_mode FROM v$pdbs WHERE name='{{ PDBName }}'")
 (pdb_open_mode, ) = cursor.fetchone()
 if pdb_open_mode == "MOUNTED":
-    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} OPEN")
-    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
-    print("PDB ({{ PDBName }}) opened")
+    try:
+        cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} OPEN")
+        print("PDB ({{ PDBName }}) opened")
+    except cx_Oracle.DatabaseError as exc:
+        print(f"Open of PDB ({{ PDBName }}) failed:");
+        error, = exc.args
+        print("Oracle-Error-Code:", error.code)
+        print("Oracle-Error-Message:", error.message)
+        exit(1)
+
+# ------------------------------------------------------------------------------
+# Ensure that the database is in ARCHIVELOG mode and Auto UNDO management.
+# This requires the change to be done in MOUNT mode
+# ------------------------------------------------------------------------------
+
+restart_required = False
+
+cursor.execute("SELECT log_mode FROM v$database")
+(log_mode, ) = cursor.fetchone()
+if log_mode == "NOARCHIVELOG":
+    restart_required = True
+
+cursor.execute("SELECT value FROM v$parameter WHERE name = 'undo_management'")
+(undo_mgt, ) = cursor.fetchone()
+if undo_mgt != 'AUTO':
+    cursor.execute("ALTER SESSION SET CONTAINER=CDB$ROOT")
+    cursor.execute("ALTER SYSTEM SET UNDO_MANAGEMENT='AUTO' SCOPE=SPFILE")
+    print("UNDO_MANAGEMENT set to 'AUTO'.")
+    restart_required = True
+
+print(f"Database is in {log_mode} mode, and UNDO_MANAGEMENT='{undo_mgt}'.")
+    
+# ------------------------------------------------------------------------------
+# Restart the DB instance and perform any necessary changes
+# ------------------------------------------------------------------------------
+
+if restart_required:
+    conn.shutdown(mode = cx_Oracle.DBSHUTDOWN_IMMEDIATE)
+    cursor.execute("ALTER DATABASE CLOSE NORMAL")
+    cursor.execute("ALTER DATABASE DISMOUNT")
+    cursor.close()
+    conn.shutdown(mode = cx_Oracle.DBSHUTDOWN_FINAL)
+    conn.close()
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA | cx_Oracle.PRELIM_AUTH)
+    conn.startup()
+    conn.close()
+    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA)
+    cursor = conn.cursor()
+    cursor.execute("ALTER DATABASE MOUNT")
+    if log_mode == "NOARCHIVELOG":
+        cursor.execute("ALTER DATABASE ARCHIVELOG")
+        print('Database changed to ARCHIVELOG mode.')
+    cursor.execute("ALTER DATABASE OPEN")
+
+# ------------------------------------------------------------------------------
+# Enable logins to database, if required
+# ------------------------------------------------------------------------------
+
+cursor.execute("SELECT status, logins, database_status FROM v$instance")
+(status, logins, database_status) = cursor.fetchone()
+
+print(f'Status of CDB Instance is {status}, status of database is {database_status}, and logins are {logins}')
+
+if logins == 'RESTRICTED':
+    cursor.execute('ALTER SYSTEM DISABLE RESTRICTED SESSION')
+    print('Logins have been enabled in CDB')
+
+# ------------------------------------------------------------------------------
+# Open and save the state of the pluggable database, if required
+# ------------------------------------------------------------------------------
 
 cursor.execute("SELECT open_mode FROM v$pdbs WHERE name='{{ PDBName }}'")
 (pdb_open_mode, ) = cursor.fetchone()
 
 print(f'Status of PDB ({{ PDBName }}) is {pdb_open_mode}')
 
-# ------------------------------------------------------------------------------
-# Save the state of the pluggable database, if required
-# ------------------------------------------------------------------------------
+if pdb_open_mode == "MOUNTED":
+    try:
+        cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} OPEN")
+        print("PDB ({{ PDBName }}) opened")
+    except cx_Oracle.DatabaseError as exc:
+        print(f"Open of PDB ({{ PDBName }}) failed:");
+        error, = exc.args
+        print("Oracle-Error-Code:", error.code)
+        print("Oracle-Error-Message:", error.message)
+        exit(1)
 
 cursor.execute("SELECT state FROM cdb_pdb_saved_states WHERE con_name='{{ PDBName }}'")
-(pdb_saved_state, ) = cursor.fetchone()
+row = cursor.fetchone()
+if row is None:
+    pdb_saved_state = None
+else:
+    pdb_saved_state = row[0]
 if pdb_saved_state is None or pdb_saved_state != "OPEN":
     cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
     print("PDB ({{ PDBName }}) state saved")
 else:
-    print(f"Status of PDB ({{ PDBName }}) is {pdb_saved_state}")
+    print(f"Saved state of PDB ({{ PDBName }}) is {pdb_saved_state}")
 
 # ------------------------------------------------------------------------------
 # Create OGG user in local container, if required
@@ -234,38 +319,6 @@ else:
     exit(1)
 
 # ------------------------------------------------------------------------------
-# Ensure that the database is in ARCHIVELOG mode and Auto UNDO management.
-# This requires the change to be done in MOUNT mode
-# ------------------------------------------------------------------------------
-
-cursor.execute("SELECT log_mode FROM v$database")
-(log_mode, ) = cursor.fetchone()
-cursor.execute("SELECT value FROM v$parameter WHERE name = 'undo_management'")
-(undo_mgt, ) = cursor.fetchone()
-print(f"Database is in {log_mode} mode, and UNDO_MANAGEMENT='{undo_mgt}'.")
-if (log_mode == "NOARCHIVELOG" or undo_mgt != 'AUTO'):
-    cursor.execute("ALTER SESSION SET CONTAINER=CDB$ROOT")
-    if undo_mgt != 'AUTO':
-        cursor.execute("ALTER SYSTEM SET UNDO_MANAGEMENT='AUTO' SCOPE=SPFILE")
-        print("UNDO_MANAGEMENT set to 'AUTO'.")
-    conn.shutdown(mode = cx_Oracle.DBSHUTDOWN_IMMEDIATE)
-    cursor.execute("ALTER DATABASE CLOSE NORMAL")
-    cursor.execute("ALTER DATABASE DISMOUNT")
-    cursor.close()
-    conn.shutdown(mode = cx_Oracle.DBSHUTDOWN_FINAL)
-    conn.close()
-    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA | cx_Oracle.PRELIM_AUTH)
-    conn.startup()
-    conn.close()
-    conn   = cx_Oracle.connect("/", mode=cx_Oracle.SYSDBA)
-    cursor = conn.cursor()
-    cursor.execute("ALTER DATABASE MOUNT")
-    if log_mode == "NOARCHIVELOG":
-        cursor.execute("ALTER DATABASE ARCHIVELOG")
-        print('Database changed to ARCHIVELOG mode.')
-    cursor.execute("ALTER DATABASE OPEN")
-
-# ------------------------------------------------------------------------------
 # Ensure that the database is in FORCE LOGGING mode, and supplemental logging is
 # collected.
 # This can be done in OPEN mode
@@ -299,6 +352,15 @@ if int(undo_rtn) < 86400:
     cursor.execute("ALTER SYSTEM SET UNDO_RETENTION=86400")
     print('UNDO_RETENTION set to 86400.')
 
+cursor.execute("SELECT value FROM v$parameter WHERE name = 'local_listener'")
+(local_listener, ) = cursor.fetchone()
+if local_listener is None:
+    local_listener = '(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={{ inventory_hostname }})(PORT={{ oracle_listener_port }})))'
+    cursor.execute(f"ALTER SYSTEM SET LOCAL_LISTENER='{local_listener}'")
+    print(f"LOCAL_LISTENER set to '{local_listener}'")
+else:
+    print(f'LOCAL_LISTENER={local_listener}')
+
 # ------------------------------------------------------------------------------
 # Define the required service name in the CDB to be used for testing
 # ------------------------------------------------------------------------------
@@ -308,8 +370,12 @@ ogg_service_name         = ogg_service_network_name.split('.')[0]
 sql = """
     SELECT count(*)
         FROM dba_services
-        WHERE name=:name"""
-cursor.execute(sql, {"name": ogg_service_name})
+        WHERE name=:name
+            OR network_name=:nw_name"""
+cursor.execute(sql, {
+    "name":    ogg_service_name,
+    "nw_name": ogg_service_network_name
+    })
 (num_services, ) = cursor.fetchone()
 if num_services == 0:
     print(f'Service {ogg_service_name} is not defined in CDB')
@@ -317,14 +383,14 @@ if num_services == 0:
         ogg_service_name,
         ogg_service_network_name
     ]
-    cursor.callproc('dbms_service.create_service', parms)
-    print(f"Service {ogg_service_name} created as {ogg_service_network_name} in CDB")
-    parms  = [
-        ogg_service_name,
-        None
-    ]
-    cursor.callproc('dbms_service.start_service', parms)
-    print(f'Service {ogg_service_name} started in CDB')
+    try:
+        cursor.callproc('dbms_service.create_service', parms)
+        print(f"Service {ogg_service_name} created as {ogg_service_network_name} in CDB")
+    except cx_Oracle.DatabaseError as exc:
+        print(f"Creation of service ({ogg_service_name}) failed in CDB:");
+        error, = exc.args
+        print("Oracle-Error-Code:", error.code)
+        print("Oracle-Error-Message:", error.message)
 else:
     print(f"Service {ogg_service_name} is defined in CDB")
 
@@ -340,13 +406,19 @@ lsnr_serv = str(lsnr_proc.stdout.read()).upper()
 
 if lsnr_serv.find(ogg_service_network_name) == -1:
     parms  = [ogg_service_name, None]
-    cursor.callproc('dbms_service.start_service', parms)
-    print(f'Database service ({ogg_service_name}) started.')
+    try:
+        cursor.callproc('dbms_service.start_service', parms)
+        print(f'Database service ({ogg_service_name}) started in CDB.')
+    except cx_Oracle.DatabaseError as exc:
+        print(f"Start of service ({ogg_service_name}) failed in CDB:");
+        error, = exc.args
+        print("Oracle-Error-Code:", error.code)
+        print("Oracle-Error-Message:", error.message)
 else:
     print(f'Database service ({ogg_service_name}) is already started.')
 
 # ------------------------------------------------------------------------------
-# Define the required service name in the CDB to be used for testing
+# Define the required service name in the PDB to be used for testing
 # ------------------------------------------------------------------------------
 
 cursor.execute('ALTER SESSION SET CONTAINER={{ PDBName }}')
@@ -355,8 +427,12 @@ ogg_service_name         = ogg_service_network_name.split('.')[0]
 sql = """
     SELECT count(*)
         FROM dba_services
-        WHERE name=:name"""
-cursor.execute(sql, {"name": ogg_service_name})
+        WHERE name=:name
+            OR network_name=:nw_name"""
+cursor.execute(sql, {
+    "name":    ogg_service_name,
+    "nw_name": ogg_service_network_name
+    })
 (num_services, ) = cursor.fetchone()
 if num_services == 0:
     print(f'Service {ogg_service_name} is not defined in PDB, {{ PDBName }}')
@@ -364,15 +440,18 @@ if num_services == 0:
         ogg_service_name,
         ogg_service_network_name
     ]
-    cursor.callproc('dbms_service.create_service', parms)
-    print(f"Service {ogg_service_name} created as {ogg_service_network_name} in PDB, {{ PDBName }}")
+    try:
+        cursor.callproc('dbms_service.create_service', parms)
+        print(f"Service {ogg_service_name} created as {ogg_service_network_name} in PDB, {{ PDBName }}")
+    except cx_Oracle.DatabaseError as exc:
+        print(f"Creation of service ({ogg_service_name}) failed in PDB:");
+        error, = exc.args
+        print("Oracle-Error-Code:", error.code)
+        print("Oracle-Error-Message:", error.message)
     parms  = [
         ogg_service_name,
         None
     ]
-    cursor.callproc('dbms_service.start_service', parms)
-    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
-    print(f'Service {ogg_service_name} started in PDB, {{ PDBName }}')
 else:
     print(f"Service {ogg_service_name} is defined in PDB, {{ PDBName }}")
 
@@ -388,8 +467,15 @@ lsnr_serv = str(lsnr_proc.stdout.read()).upper()
 
 if lsnr_serv.find(ogg_service_network_name) == -1:
     parms  = [ogg_service_name, None]
-    cursor.callproc('dbms_service.start_service', parms)
-    print(f'Database service ({ogg_service_name}) started.')
+    try:
+        cursor.callproc('dbms_service.start_service', parms)
+        print(f'Database service ({ogg_service_name}) started in PDB.')
+    except cx_Oracle.DatabaseError as exc:
+        print(f"Start of service ({ogg_service_name}) failed in PDB:");
+        error, = exc.args
+        print("Oracle-Error-Code:", error.code)
+        print("Oracle-Error-Message:", error.message)
+    cursor.execute("ALTER PLUGGABLE DATABASE {{ PDBName }} SAVE STATE")
 else:
     print(f'Database service ({ogg_service_name}) is already started.')
 

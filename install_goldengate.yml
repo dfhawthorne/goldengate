@@ -7,14 +7,86 @@
   tasks:
 
   # --------------------------------------------------------------------------
-  # Set the hostname after the VM had been built in the XEN server farm
+  # Set global facts for OGG installation
   # --------------------------------------------------------------------------
 
-  - name:               "Set host name"
-    ansible.builtin.hostname:
-      name:             "{{ inventory_hostname }}"
-    become:             yes
-    become_user:        root
+  - name:               "Set global facts for OGG installation"
+    set_fact:
+      version:          "19100201013"
+      platform:         "Linux-x86-64"
+      response_file:    "{{ oracle_user_home }}/oggcore_oracle_v_19_1_0.rsp"
+      apply_patch_script:
+                        "{{ oracle_user_home }}/apply_ogg_patch.sh"
+      install_option:   "ORA19c"
+      software_location:
+                        "{{ oracle_base }}/product/19.1.0/ogg"
+      start_manager:    false
+      manager_port:     15000
+      installer_dir:    "{{ oracle_user_home }}/ogg"
+      configure_ogg_db: "{{ oracle_user_home }}/configure_oracle_gg.py"
+      local_cdb_service_name:
+                         "{{ globalDBName }}"
+      local_pdb_service_name: "{{ PDBName }}.YAOCM.ID.AU"
+      client_cdb_name:   "C##GGADMIN"
+      client_pdb_name:   "GGATE"
+
+  - name:                "Set extra global facts for OGG installation"
+    set_fact:
+      opatch_bin:        "{{ software_location }}/OPatch/opatch"
+
+  # ----------------------------------------------------------------------------
+  # Options for GOLDENGATE1
+  # ----------------------------------------------------------------------------
+
+  - name:                "Options for GOLDENGATE1"
+    set_fact:
+      client_type:       "CAPTURE"
+      remote_cdb_service_name:
+                         "GG2CDB19C.YAOCM.ID.AU"
+      remote_pdb_service_name:
+                         "GG2A.YAOCM.ID.AU"
+      remote_host_name:  "GOLDENGATE2.YAOCM.ID.AU"
+    when:                inventory_hostname == 'goldengate1.yaocm.id.au'
+
+  # ----------------------------------------------------------------------------
+  # Options for GOLDENGATE2
+  # ----------------------------------------------------------------------------
+
+  - name:                "Options for GOLDENGATE2"
+    set_fact:
+      client_type:       "APPLY"
+      remote_cdb_service_name:
+                         "GG1CDB19C.YAOCM.ID.AU"
+      remote_pdb_service_name:
+                         "GG1A.YAOCM.ID.AU"
+      remote_host_name:  "GOLDENGATE1.YAOCM.ID.AU"
+    when:                inventory_hostname == 'goldengate2.yaocm.id.au'
+
+  # ----------------------------------------------------------------------------
+  # OGG Installation Options for OGG Microservices
+  # ----------------------------------------------------------------------------
+
+  - name:                "OGG Installation Options for OGG Microservices"
+    set_fact:
+      patch_number:      "31908587"
+      patch_archive_loc: "{{ nfs_software_dir }}/goldengate/microservices"
+      sw_archive:        "{{ nfs_software_dir }}/goldengate/microservices/191004_fbo_ggs_Linux_x64_services_shiphome.zip"
+      configure_ogg_mgr: "{{ oracle_user_home }}/configure_ogg_micro.sh"
+      installer_bin:     "{{ installer_dir }}/fbo_ggs_Linux_x64_services_shiphome/Disk1/runInstaller"
+    when:                ogg_install_option == 'microservices'
+
+  # ----------------------------------------------------------------------------
+  # OGG Installation Options for OGG Classic
+  # ----------------------------------------------------------------------------
+
+  - name:                "OGG Installation Options for OGG Classic"
+    set_fact:
+      patch_number:      "31908556"
+      patch_archive_loc: "{{ nfs_software_dir }}/goldengate/classic"
+      sw_archive:        "{{ nfs_software_dir }}/goldengate/classic/191004_fbo_ggs_Linux_x64_shiphome.zip"
+      configure_ogg_mgr: "{{ oracle_user_home }}/configure_ogg_classic.sh"
+      installer_bin:     "{{ installer_dir }}/fbo_ggs_Linux_x64_shiphome/Disk1/runInstaller"
+    when:                ogg_install_option == 'classic'
 
   # --------------------------------------------------------------------------
   # Load passwords from passwords/oracle.yml which has the following
@@ -29,7 +101,7 @@
 
   - name:               "Load passwords"
     include_vars:
-      file:             "passwords/oracle.yml"
+      file:             "../orchestration/passwords/oracle.yml"
     no_log:             true
 
   - name:               "Create directory for OGG Installer"
@@ -76,6 +148,8 @@
         -               "{{ response_file }}"
       creates:          "{{ software_location }}"
     register:           ogg_install
+    changed_when: >
+      ("Successfully Setup Software." in ogg_install.stdout)
     become:             yes
     become_user:        oracle
 
@@ -83,6 +157,22 @@
     debug:
       var:              ogg_install.stdout_lines
     when:               ogg_install.stdout_lines is defined
+
+  - name:               "Run orainstRoot.sh after Oracle GG Software Installation"
+    command:
+      argv:
+      -                 "{{ inventory_location }}/orainstRoot.sh"
+    register:           orainstRoot
+    when:
+    -                   ogg_install.stdout is defined
+    -                   ogg_install.stdout is search('/orainstRoot.sh')
+    become:             yes
+    become_user:        root
+
+  - name:               "Output from orainstRoot.sh script"
+    debug:
+      var:              orainstRoot.stdout_lines
+    when:               orainstRoot.stdout_lines is defined
 
   # ------------------- Configure firewall for OGG
 
@@ -145,6 +235,8 @@
             -           "{{ apply_patch_script }}"
             -           "{{ patch_number }}"
         register:       apply_patch
+        changed_when: >
+          (apply_patch.stdout is search("Patch \d+ successfully applied"))
 
       - name:           "Display output from apply of patch"
         debug:
@@ -227,6 +319,20 @@
     become:             yes
     become_user:        oracle
     register:           configure_ogg_db
+    changed_when: >
+      (configure_ogg_db.stdout is search('Common user, "[^"]+", created')) or
+      ('Privileges granted to common user,' in configure_ogg_db.stdout) or
+      ('Database changed to ARCHIVELOG mode' in configure_ogg_db.stdout) or
+      ('Logins have been enabled in CDB' in configure_ogg_db.stdout) or
+      (configure_ogg_db.stdout is search('PDB ([^)]+) opened')) or
+      (configure_ogg_db.stdout is search('User, "[^"]+", created in GG1A')) or
+      (configure_ogg_db.stdout is search('Privileges granted to user, "[^"]+", in ')) or
+      ('Supplement log data is now being recorded' in configure_ogg_db.stdout) or
+      ('All changes are now being logged' in configure_ogg_db.stdout) or
+      ('ENABLE_GOLDENGATE_REPLICATION set to true' in configure_ogg_db.stdout) or
+      (configure_ogg_db.stdout is search('UNDO_RETENTION set to \d+')) or
+      (configure_ogg_db.stdout is search("LOCAL_LISTENER set to '\(.*\)\)\)'"))
+
 
   - name:               "Display output from Configure DB for OGG"
     debug:
@@ -245,6 +351,28 @@
     debug:
       var:              configure_ogg_mgr.stdout_lines
     when:               configure_ogg_mgr.stdout_lines is defined
+
+  # -----------------------------------------------------------------------------
+  # Update .bash_profile for Oracle GoldenGate installation
+  # -----------------------------------------------------------------------------
+
+  - name:                 "Update .bash_profile for Oracle GoldenGate installation"
+    ansible.builtin.blockinfile:
+      create:             yes
+      owner:              oracle
+      group:              "{{ install_group }}"
+      mode:               "0700"
+      state:              present
+      path:               "{{ oracle_user_home }}/.bash_profile"
+      marker:             "# {mark} ANSIBLE MANAGED BLOCK FOR OGG INSTALLATION"
+      block: |
+        export OGG_HOME="{{ software_location }}"
+        case ":${PATH}:" in
+            *":${OGG_HOME}:"*) ;;
+            *) export PATH="${OGG_HOME}:${PATH}" ;;
+        esac
+    become:             yes
+    become_user:        oracle
      
   # ----------------------------------------------------------------------------
   # Handlers

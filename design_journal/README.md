@@ -19,4 +19,7 @@ Prof. Fred Brooks recommends that one keep a journal of design decisions in orde
 * [2021-02-20](2021_02_20.md) Configuring Capture in Integrated Mode
 * [2023-11-05](2023_11_05.md) Integration into XEN Servers
 * [2023-11-21](2023_11_21.md) Update Cluster Name
+* [2023-12-02](2023_12_02.md) Minor Change to OGG Classic Configuration
+* [2023-12-07](2023_12_07.md) Configuration of DB for OGG Updated
+* [2023-12-09](2023_12_09.md) OGG Build Integrated into Orchestration
 
